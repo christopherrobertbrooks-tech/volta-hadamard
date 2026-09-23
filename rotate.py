@@ -114,7 +114,8 @@ def main():
             rotated_names.append(t.name)
         else:
             if (any(k in t.name for k in LINEARISH) and t.name.endswith(".weight")
-                    and not t.name.endswith(SKIP_OK)):
+                    and not t.name.endswith(SKIP_OK)
+                    and "_norm" not in t.name and len(shp) >= 2):
                 skipped.append((t.name, shp))
             w.add_tensor(t.name, data, raw_dtype=t.tensor_type)
 
