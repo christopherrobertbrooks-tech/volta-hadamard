@@ -138,54 +138,64 @@ Run with the venv at `~/bonsai/rotvenv` and
 # The tool turned out to be useful for something else
 
 Prism's PQ2_0 is a dead end (their quantiser is a stub). But the rotation is
-general: it should make weights easier for *any* aggressive quantiser, not just
-theirs. llama.cpp's own k-quants are outlier-sensitive at low bit depths.
+general: it should make weights easier for *any* aggressive quantiser. So:
+quantise the same model from a plain F16 and from a rotated F16, and compare.
 
-So: quantise the same model from a plain F16 and from a rotated F16, and compare.
+`llama-perplexity`, 20 chunks at `-c 512`, same corpus, run on the PrismML fork
+(which applies the activation transform). Block 512, `sign_mode = identity`.
 
-`llama-perplexity`, 20 chunks at `-c 512`, Qwen3-4B, same corpus throughout,
-run on the PrismML fork (which applies the activation transform):
+| quant | Qwen3-4B plain | rot | Qwen3-8B plain | rot |
+| :--- | ---: | ---: | ---: | ---: |
+| Q4_K_M | 10.0389 | 10.3035 *(+2.6%)* | 8.9124 | **8.6749** *(-2.7%)* |
+| Q3_K_M | 11.2520 | **10.6494** *(-5.4%)* | 9.0948 | 9.1697 *(+0.8%)* |
+| Q2_K | 15.4422 | **14.7720** *(-4.3%)* | 11.8696 | **11.3152** *(-4.7%)* |
 
-| quant | plain | rotated | change |
-| :--- | ---: | ---: | :--- |
-| Q4_K_M | 10.0389 | 10.3035 | **+2.6% worse** |
-| Q3_K_M | 11.2520 | 10.6494 | **-5.4% better** |
-| Q2_K | 15.4422 | 14.7720 | **-4.3% better** |
+## What survives two models
 
-**Rotation hurts at 4-bit and helps at 3-bit and below.** The sign flips between
-them, which is the outlier argument made visible: the rotation introduces error
-of its own, and that only pays for itself once precision is scarce enough that
-outliers dominate. A single number could be noise; a clean sign change across
-three depths is a mechanism.
+**Only Q2_K is consistent**: -4.3% and -4.7%, both directions agreeing. That is
+the finding.
+
+**Q4_K_M and Q3_K_M flip sign between models**, so those are noise at this
+magnitude. An earlier version of this file claimed a clean crossover -- rotation
+hurting at 4-bit and helping below -- derived from the 4B alone. The 8B killed
+it. That claim was overfitting to one model and is retracted.
+
+The surviving statement is narrower and better supported: **rotation improves
+Q2_K by ~4-5% and does nothing reliable above 2 bits.** Still consistent with
+the outlier argument, but at a coarser grain than one model suggested.
 
 ## Random signs made it worse
 
-| Q2_K from | PPL |
+| Q2_K from (Qwen3-4B) | PPL |
 | :--- | ---: |
 | plain | 15.4422 |
 | rotated, `sign_mode = identity` | **14.7720** |
 | rotated + random signs, `sign_mode = explicit` | 15.6088 |
 
-This is the opposite of the QuaRot/QuIP# argument, which says the *randomness*
-is what Gaussianises the distribution. Here the plain Sylvester-Walsh matrix
-beat the randomised one, and the randomised one was worse than no rotation at
-all. Unexplained. Possibly the sign vectors interact badly with k-quant's
-per-block scaling, possibly one seed's luck.
+Opposite of the QuaRot/QuIP# argument that *randomness* is the active
+ingredient. Here the plain Sylvester-Walsh matrix beat the randomised one, and
+the randomised one was worse than no rotation at all. **Single seed, single
+model -- given that the Q3/Q4 results turned out to be noise, treat this as
+unreplicated.**
 
-## Caveats, before anyone gets excited
+## Caveats
 
-- **One model** (Qwen3-4B), one corpus, 20 chunks.
-- **Only runs on the PrismML fork.** Upstream llama.cpp has no
-  `prism.hadamard.*` support for weights, so these files would be garbage there.
-  Upstream *did* merge Hadamard rotation for the KV cache
-  ([#21038](https://github.com/ggml-org/llama.cpp/pull/21038)), so the technique
-  is not foreign to it — but weight rotation is not implemented.
-- The effect is modest: 4-5%.
-- Single seed for the sign vectors.
+- Two models, both Qwen. No other family tested.
+- **One corpus** (llama.cpp docs -- technical markdown). The effect could be
+  corpus-specific; wikitext-2 would make these numbers comparable to published
+  work and is the cheapest remaining check.
+- One block size (512), one sign seed.
+- **Only runs on the PrismML fork.** Upstream has no `prism.hadamard.*` support
+  for weights -- it merged Hadamard for the KV cache
+  ([#21038](https://github.com/ggml-org/llama.cpp/pull/21038)), not for weights.
 
 ## What would make it a real finding
 
-A second and third model, at least one other corpus, and several seeds for the
-sign vectors. If the 4-bit/3-bit crossover holds across models, that is a
-genuine and useful result about llama.cpp's k-quants — and the practical
-statement would be "rotate before quantising below 4 bits."
+Ranked by information per unit cost:
+
+1. **A different corpus** (wikitext-2) -- tests a live confound, costs a download.
+2. **Several sign seeds** -- the random-sign result is the oddest thing here and
+   rests on one seed.
+3. **Block size** -- 1024 vs 512. Bigger blocks mix more values, so the
+   outlier-spreading should strengthen if the mechanism is what we think.
+4. **A non-Qwen model** -- tests architecture generality, costs ~16 GB.
