@@ -201,18 +201,41 @@ been rotated before.
 -0.71%: the right direction, but **inside the error bars** and roughly six times
 smaller than the dense models' -4.3% and -4.7%.
 
-## The dense numbers may not be significant either
+## Re-measured properly: the dense effect is real and much larger
 
-This run used 200 chunks and recorded llama-perplexity's own error estimate. The
-dense runs used **20 chunks and never recorded one**. At 200 chunks the error
-here is about +/-0.18 on a PPL near 14; at 20 chunks it would be roughly
-sqrt(10) larger, around +/-0.58, which is ~4% -- the same size as the -4.3%
-effect that was being claimed.
+The dense runs used 20 chunks on an unsaved corpus and recorded no error bars,
+so the -4.3% could not be trusted either way. Re-run on wikitext-2 at 200
+chunks with llama-perplexity's own error estimate:
 
-So the one finding said to have survived two models may never have cleared its
-own noise. Two models agreeing in sign is weak evidence: a coin lands the same
-way twice 25% of the time. A re-run of Qwen3-4B Q2_K under this methodology is
-the thing that settles it, and is in progress.
+| Qwen3-4B Q2_K | PPL |
+| :--- | ---: |
+| plain | 36.1895 +/- 0.6832 |
+| rotated | **29.7360 +/- 0.5037** |
+
+**-17.83%, cleanly separated beyond the error bars.** Four times the originally
+reported effect. The old corpus was understating it, not inventing it.
+
+## Why the MoE saw nothing: there was little damage to recover
+
+Against each model's own F16 baseline on the same corpus and chunk count:
+
+| | F16 | Q2_K plain | damage | Q2_K rotated | damage recovered |
+| :--- | ---: | ---: | ---: | ---: | ---: |
+| Qwen3-4B (dense) | 13.8905 | 36.1895 | **+160%** | 29.7360 | **29%** |
+| OLMoE-1B-7B (MoE) | 10.8198 | 14.2224 | **+31%** | 14.1211 | 3% |
+
+Q2_K is catastrophic for Qwen3-4B and merely mild for OLMoE. Rotation recovers
+a large share of a large loss, and almost nothing of a small one. The benefit
+tracks how much damage the quantiser did in the first place -- which is what an
+outlier-suppression argument predicts, since there is nothing to suppress when
+the quantiser was not struggling.
+
+**What this does not establish:** these are two different models, not one
+architecture toggled. Dense-vs-MoE is confounded with Qwen-vs-OLMo, 4B-vs-7B,
+and different training data. The clean claim is the correlation with damage,
+not a claim about MoE. Separating those needs a dense and an MoE model from the
+same family -- Qwen3-8B against Qwen3-30B-A3B -- which needs about 120 GB of
+free disk this machine does not have.
 
 ## Random signs made it worse
 
