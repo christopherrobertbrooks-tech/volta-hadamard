@@ -164,6 +164,56 @@ The surviving statement is narrower and better supported: **rotation improves
 Q2_K by ~4-5% and does nothing reliable above 2 bits.** Still consistent with
 the outlier argument, but at a coarser grain than one model suggested.
 
+## MoE: the tool skipped 91% of the model
+
+Expert weights are 3-D (`ffn_{gate,up,down}_exps.weight`, ggml order
+`ne0=n_in, ne1=n_out, ne2=n_expert`) and matched neither the dense suffix list
+nor the `len(shape) == 2` guard. On gpt-oss-20b that is **91.37% of all
+parameters silently skipped** against 3.05% actually rotated -- and the tool
+printed success. Fixed, and it now aborts rather than write a partial rotation.
+
+The runtime side already worked. `build_lora_mm_id` (the MoE expert path,
+`llama-graph.cpp:1605`) carries the same Hadamard hook as `build_lora_mm`, and
+`llama_verify_hadamard_graph` already covers `GGML_OP_MUL_MAT_ID`. Only the
+exporter was missing. The fork also keeps an architecture allowlist and refuses
+to load folded weights for anything unverified; `olmoe` is not on it, so this
+run needed a one-line local addition (`olmoe.cpp` issues no raw `ggml_mul_mat`,
+so it meets the gate's condition -- not upstreamed).
+
+**The round-trip is exact on MoE.** Rotating 48 expert tensors and inverting at
+runtime returns the original model:
+
+| OLMoE-1B-7B | PPL |
+| :--- | ---: |
+| plain F16 | 10.8198 +/- 0.1374 |
+| rotated F16 | 10.8214 +/- 0.1374 |
+
++0.015% apart. That is the check that matters -- 91% of these weights had never
+been rotated before.
+
+**But the Q2_K benefit does not transfer.**
+
+| OLMoE-1B-7B Q2_K | PPL |
+| :--- | ---: |
+| plain | 14.2224 +/- 0.1842 |
+| rotated | 14.1211 +/- 0.1813 |
+
+-0.71%: the right direction, but **inside the error bars** and roughly six times
+smaller than the dense models' -4.3% and -4.7%.
+
+## The dense numbers may not be significant either
+
+This run used 200 chunks and recorded llama-perplexity's own error estimate. The
+dense runs used **20 chunks and never recorded one**. At 200 chunks the error
+here is about +/-0.18 on a PPL near 14; at 20 chunks it would be roughly
+sqrt(10) larger, around +/-0.58, which is ~4% -- the same size as the -4.3%
+effect that was being claimed.
+
+So the one finding said to have survived two models may never have cleared its
+own noise. Two models agreeing in sign is weak evidence: a coin lands the same
+way twice 25% of the time. A re-run of Qwen3-4B Q2_K under this methodology is
+the thing that settles it, and is in progress.
+
 ## Random signs made it worse
 
 | Q2_K from (Qwen3-4B) | PPL |
