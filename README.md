@@ -132,3 +132,60 @@ Run with the venv at `~/bonsai/rotvenv` and
 `PYTHONPATH=~/bonsai/llama.cpp/gguf-py`:
 
     rotate2.py in-F16.gguf out.gguf 512 signs
+
+---
+
+# The tool turned out to be useful for something else
+
+Prism's PQ2_0 is a dead end (their quantiser is a stub). But the rotation is
+general: it should make weights easier for *any* aggressive quantiser, not just
+theirs. llama.cpp's own k-quants are outlier-sensitive at low bit depths.
+
+So: quantise the same model from a plain F16 and from a rotated F16, and compare.
+
+`llama-perplexity`, 20 chunks at `-c 512`, Qwen3-4B, same corpus throughout,
+run on the PrismML fork (which applies the activation transform):
+
+| quant | plain | rotated | change |
+| :--- | ---: | ---: | :--- |
+| Q4_K_M | 10.0389 | 10.3035 | **+2.6% worse** |
+| Q3_K_M | 11.2520 | 10.6494 | **-5.4% better** |
+| Q2_K | 15.4422 | 14.7720 | **-4.3% better** |
+
+**Rotation hurts at 4-bit and helps at 3-bit and below.** The sign flips between
+them, which is the outlier argument made visible: the rotation introduces error
+of its own, and that only pays for itself once precision is scarce enough that
+outliers dominate. A single number could be noise; a clean sign change across
+three depths is a mechanism.
+
+## Random signs made it worse
+
+| Q2_K from | PPL |
+| :--- | ---: |
+| plain | 15.4422 |
+| rotated, `sign_mode = identity` | **14.7720** |
+| rotated + random signs, `sign_mode = explicit` | 15.6088 |
+
+This is the opposite of the QuaRot/QuIP# argument, which says the *randomness*
+is what Gaussianises the distribution. Here the plain Sylvester-Walsh matrix
+beat the randomised one, and the randomised one was worse than no rotation at
+all. Unexplained. Possibly the sign vectors interact badly with k-quant's
+per-block scaling, possibly one seed's luck.
+
+## Caveats, before anyone gets excited
+
+- **One model** (Qwen3-4B), one corpus, 20 chunks.
+- **Only runs on the PrismML fork.** Upstream llama.cpp has no
+  `prism.hadamard.*` support for weights, so these files would be garbage there.
+  Upstream *did* merge Hadamard rotation for the KV cache
+  ([#21038](https://github.com/ggml-org/llama.cpp/pull/21038)), so the technique
+  is not foreign to it — but weight rotation is not implemented.
+- The effect is modest: 4-5%.
+- Single seed for the sign vectors.
+
+## What would make it a real finding
+
+A second and third model, at least one other corpus, and several seeds for the
+sign vectors. If the 4-bit/3-bit crossover holds across models, that is a
+genuine and useful result about llama.cpp's k-quants — and the practical
+statement would be "rotate before quantising below 4 bits."
