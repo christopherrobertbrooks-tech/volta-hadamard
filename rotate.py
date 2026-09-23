@@ -16,12 +16,31 @@ import sys, numpy as np
 from gguf import GGUFReader, GGUFWriter, GGMLQuantizationType
 from gguf.constants import GGUFValueType
 
-# Tensor suffixes to rotate: 2-D linear weights consumed by mul_mat.
+# Linear weights consumed by mul_mat / mul_mat_id.
 # token_embd is deliberately excluded (it would need inverse-after-lookup).
+#
+# The *_exps tensors are MoE: all experts stacked into one 3-D tensor, ggml
+# order (ne0=n_in, ne1=n_out, ne2=n_expert), so numpy sees (n_expert, n_out,
+# n_in). The input dim is still the LAST numpy axis, which is the axis the
+# blockwise rotation already operates on -- so the same code handles them once
+# the names are listed and the rank check allows 3-D.
+#
+# ffn_gate_inp (the router) is deliberately NOT here. It feeds a discrete
+# argmax over experts, so quantization error there flips which expert runs
+# rather than perturbing a value. It stays unrotated and high precision.
 ROTATE_SUFFIXES = (
     "attn_q.weight", "attn_k.weight", "attn_v.weight", "attn_output.weight",
     "ffn_gate.weight", "ffn_up.weight", "ffn_down.weight",
+    "ffn_gate_exps.weight", "ffn_up_exps.weight", "ffn_down_exps.weight",
+    "ffn_gate_shexp.weight", "ffn_up_shexp.weight", "ffn_down_shexp.weight",
 )
+
+# Anything matching this that we did NOT rotate gets reported, loudly. The
+# earlier version silently skipped every MoE expert tensor -- 91% of gpt-oss-20b
+# -- and still printed success.
+LINEARISH = ("attn_q", "attn_k", "attn_v", "attn_output",
+             "ffn_gate", "ffn_up", "ffn_down")
+SKIP_OK = ("ffn_gate_inp.weight", "ffn_gate_inp.bias")   # router, on purpose
 
 def hadamard(n):
     """Orthonormal Walsh-Hadamard, Sylvester recursion. Mirrors ggml_gen_hadamard.
@@ -79,11 +98,11 @@ def main():
     print(f"copied {copied} KV entries")
 
     # --- rotate the target tensors -------------------------------------------
-    rotated_names = []
+    rotated_names, skipped = [], []
     for t in r.tensors:
-        shp = tuple(int(x) for x in t.shape)          # ggml order: (ne0=in, ne1=out)
-        data = t.data                                  # numpy, (n_out, n_in) for 2-D
-        if t.name.endswith(ROTATE_SUFFIXES) and len(shp) == 2:
+        shp = tuple(int(x) for x in t.shape)          # ggml order: (ne0=in, ne1=out[, ne2=expert])
+        data = t.data                                  # numpy, (..., n_out, n_in)
+        if t.name.endswith(ROTATE_SUFFIXES) and len(shp) in (2, 3):
             n_in = shp[0]
             assert data.shape[-1] == n_in, f"{t.name}: expected last axis {n_in}, got {data.shape}"
             assert n_in % block == 0, f"{t.name}: n_in {n_in} not divisible by {block}"
@@ -94,8 +113,18 @@ def main():
             w.add_tensor(t.name, a, raw_dtype=GGMLQuantizationType.F16)
             rotated_names.append(t.name)
         else:
+            if (any(k in t.name for k in LINEARISH) and t.name.endswith(".weight")
+                    and not t.name.endswith(SKIP_OK)):
+                skipped.append((t.name, shp))
             w.add_tensor(t.name, data, raw_dtype=t.tensor_type)
-    print(f"rotated {len(rotated_names)} tensors, block={block}")
+
+    n3 = sum(1 for n in rotated_names if "_exps." in n or "_shexp." in n)
+    print(f"rotated {len(rotated_names)} tensors ({n3} MoE expert), block={block}")
+    if skipped:
+        print(f"  !! {len(skipped)} linear weights NOT rotated -- check the suffix list:")
+        for n, s in skipped[:8]:
+            print(f"     {n}  shape={s}")
+        raise SystemExit("refusing to write a partially rotated model")
 
     # --- declare the rotation -------------------------------------------------
     w.add_key_value("prism.hadamard.version", 1, GGUFValueType.UINT32)
