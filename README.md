@@ -253,10 +253,12 @@ unreplicated.**
 
 ## Caveats
 
-- Two models, both Qwen. No other family tested.
-- **One corpus** (llama.cpp docs -- technical markdown). The effect could be
-  corpus-specific; wikitext-2 would make these numbers comparable to published
-  work and is the cheapest remaining check.
+- Three models: Qwen3-4B and Qwen3-8B (dense) and OLMoE-1B-7B (MoE). Dense vs MoE
+  is confounded with model family, size and training data (see above).
+- **Corpus:** the headline -17.8% and the dense-vs-MoE damage table are on
+  wikitext-2 at 200 chunks with error bars ([Re-measured properly](#re-measured-properly-the-dense-effect-is-real-and-much-larger)).
+  The earlier Q3_K/Q4_K and random-sign runs used the llama.cpp-docs corpus at 20
+  chunks without error bars and have **not** been re-run on wikitext-2.
 - One block size (512), one sign seed.
 - **Only runs on the PrismML fork.** Upstream has no `prism.hadamard.*` support
   for weights -- it merged Hadamard for the KV cache
@@ -266,7 +268,8 @@ unreplicated.**
 
 Ranked by information per unit cost:
 
-1. **A different corpus** (wikitext-2) -- tests a live confound, costs a download.
+1. ~~**A different corpus** (wikitext-2)~~ -- **done**: 200 chunks with error bars gave -17.8% (above).
+   Still open: re-running the random-sign comparison on it.
 2. **Several sign seeds** -- the random-sign result is the oddest thing here and
    rests on one seed.
 3. **Block size** -- 1024 vs 512. Bigger blocks mix more values, so the
